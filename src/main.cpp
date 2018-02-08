@@ -2,6 +2,9 @@
 #include <iostream>
 #include "json.hpp"
 #include <math.h>
+#include <string>
+#include <fstream>
+#include <sstream>
 #include "FusionEKF.h"
 #include "tools.h"
 
@@ -26,8 +29,76 @@ std::string hasData(std::string s) {
   return "";
 }
 
-int main()
-{
+void process_sensor_measurment(
+    istringstream& iss,
+    FusionEKF& fusionEKF,
+    vector<VectorXd>& estimations,
+    vector<VectorXd>& ground_truth) {
+
+  int64_t timestamp;
+  MeasurementPackage meas_package;
+  // reads first element from the current line
+  string sensor_type;
+  iss >> sensor_type;
+
+  if (sensor_type.compare("L") == 0) {
+    meas_package.sensor_type_ = MeasurementPackage::LASER;
+    meas_package.raw_measurements_ = VectorXd(2);
+    float px;
+    float py;
+    iss >> px;
+    iss >> py;
+    meas_package.raw_measurements_ << px, py;
+    iss >> timestamp;
+    meas_package.timestamp_ = timestamp;
+  } else if (sensor_type.compare("R") == 0) {
+    meas_package.sensor_type_ = MeasurementPackage::RADAR;
+    meas_package.raw_measurements_ = VectorXd(3);
+    float ro;
+    float theta;
+    float ro_dot;
+    iss >> ro;
+    iss >> theta;
+    iss >> ro_dot;
+    meas_package.raw_measurements_ << ro,theta, ro_dot;
+    iss >> timestamp;
+    meas_package.timestamp_ = timestamp;
+  }
+
+  float x_gt;
+  float y_gt;
+  float vx_gt;
+  float vy_gt;
+  iss >> x_gt;
+  iss >> y_gt;
+  iss >> vx_gt;
+  iss >> vy_gt;
+  VectorXd gt_values(4);
+  gt_values(0) = x_gt;
+  gt_values(1) = y_gt;
+  gt_values(2) = vx_gt;
+  gt_values(3) = vy_gt;
+  ground_truth.push_back(gt_values);
+
+  //Call ProcessMeasurment(meas_package) for Kalman filter
+  fusionEKF.ProcessMeasurement(meas_package);
+
+  VectorXd estimate(4);
+
+  double p_x = fusionEKF.ekf_.x_(0);
+  double p_y = fusionEKF.ekf_.x_(1);
+  double v1  = fusionEKF.ekf_.x_(2);
+  double v2 = fusionEKF.ekf_.x_(3);
+
+  estimate(0) = p_x;
+  estimate(1) = p_y;
+  estimate(2) = v1;
+  estimate(3) = v2;
+
+  estimations.push_back(estimate);
+}
+
+int server() {
   uWS::Hub h;
 
   // Create a Kalman Filter instance
@@ -58,74 +129,14 @@ int main()
 
           string sensor_measurment = j[1]["sensor_measurement"];
 
-          MeasurementPackage meas_package;
           istringstream iss(sensor_measurment);
-    	  long long timestamp;
+          process_sensor_measurment(iss, fusionEKF, estimations, ground_truth);
 
-    	  // reads first element from the current line
-    	  string sensor_type;
-    	  iss >> sensor_type;
+          double p_x = fusionEKF.ekf_.x_(0);
+          double p_y = fusionEKF.ekf_.x_(1);
 
-    	  if (sensor_type.compare("L") == 0) {
-      	  		meas_package.sensor_type_ = MeasurementPackage::LASER;
-          		meas_package.raw_measurements_ = VectorXd(2);
-          		float px;
-      	  		float py;
-          		iss >> px;
-          		iss >> py;
-          		meas_package.raw_measurements_ << px, py;
-          		iss >> timestamp;
-          		meas_package.timestamp_ = timestamp;
-          } else if (sensor_type.compare("R") == 0) {
-
-      	  		meas_package.sensor_type_ = MeasurementPackage::RADAR;
-          		meas_package.raw_measurements_ = VectorXd(3);
-          		float ro;
-      	  		float theta;
-      	  		float ro_dot;
-          		iss >> ro;
-          		iss >> theta;
-          		iss >> ro_dot;
-          		meas_package.raw_measurements_ << ro,theta, ro_dot;
-          		iss >> timestamp;
-          		meas_package.timestamp_ = timestamp;
-          }
-          float x_gt;
-    	  float y_gt;
-    	  float vx_gt;
-    	  float vy_gt;
-    	  iss >> x_gt;
-    	  iss >> y_gt;
-    	  iss >> vx_gt;
-    	  iss >> vy_gt;
-    	  VectorXd gt_values(4);
-    	  gt_values(0) = x_gt;
-    	  gt_values(1) = y_gt;
-    	  gt_values(2) = vx_gt;
-    	  gt_values(3) = vy_gt;
-    	  ground_truth.push_back(gt_values);
-
-          //Call ProcessMeasurment(meas_package) for Kalman filter
-    	  fusionEKF.ProcessMeasurement(meas_package);
-
-    	  //Push the current estimated x,y positon from the Kalman filter's state vector
-
-    	  VectorXd estimate(4);
-
-    	  double p_x = fusionEKF.ekf_.x_(0);
-    	  double p_y = fusionEKF.ekf_.x_(1);
-    	  double v1  = fusionEKF.ekf_.x_(2);
-    	  double v2 = fusionEKF.ekf_.x_(3);
-
-    	  estimate(0) = p_x;
-    	  estimate(1) = p_y;
-    	  estimate(2) = v1;
-    	  estimate(3) = v2;
-
-    	  estimations.push_back(estimate);
-
-    	  VectorXd RMSE = tools.CalculateRMSE(estimations, ground_truth);
-        cout << "RMSE: " << RMSE << endl;
+          VectorXd RMSE = tools.CalculateRMSE(estimations, ground_truth);
+          cout << "RMSE: " << RMSE << endl;
 
           json msgJson;
           msgJson["estimate_x"] = p_x;
@@ -137,10 +148,8 @@ int main()
           auto msg = "42[\"estimate_marker\"," + msgJson.dump() + "]";
           // std::cout << msg << std::endl;
           ws.send(msg.data(), msg.length(), uWS::OpCode::TEXT);
-
         }
       } else {
-
         std::string msg = "42[\"manual\",{}]";
         ws.send(msg.data(), msg.length(), uWS::OpCode::TEXT);
       }
@@ -152,12 +161,9 @@ int main()
   // doesn't compile :-(
   h.onHttpRequest([](uWS::HttpResponse *res, uWS::HttpRequest req, char *data, size_t, size_t) {
     const std::string s = "<h1>Hello world!</h1>";
-    if (req.getUrl().valueLength == 1)
-    {
+    if (req.getUrl().valueLength == 1) {
       res->end(s.data(), s.length());
-    }
-    else
-    {
+    } else {
       // i guess this should be done more gracefully?
       res->end(nullptr, 0);
     }
@@ -173,14 +179,60 @@ int main()
   });
 
   int port = 4567;
-  if (h.listen(port))
-  {
+  if (h.listen(port)) {
     std::cout << "Listening to port " << port << std::endl;
   }
-  else
-  {
+  else {
     std::cerr << "Failed to listen to port" << std::endl;
     return -1;
   }
   h.run();
+  return 0;
 }
+
+void process_data_file(string file_name) {
+  string line;
+  ifstream infile;
+  infile.open(file_name);
+  if (infile.fail()) {
+    cout << "failed to open " << file_name << endl;
+    exit(1);
+  }
+
+  Tools tools;
+  FusionEKF fusionEKF;
+  vector<VectorXd> estimations;
+  vector<VectorXd> ground_truth;
+
+  while (std::getline(infile, line)) {
+    istringstream iss(line);
+    process_sensor_measurment(iss, fusionEKF, estimations, ground_truth);
+
+    VectorXd RMSE = tools.CalculateRMSE(estimations, ground_truth);
+    cout << "RMSE: " << RMSE << endl;
+  }
+}
+
+void print_usage() {
+  cout << "Run as server mode: ./ExtendedKF" << endl;
+  cout << "Load data file: ./ExtendedKF path_to_data_file" << endl;
+  cout << endl;
+}
+
+int main(int argc, char* argv[]) {
+  string param = argc > 1? string(argv[1]) : "";
+  if (argc > 2 || (argc == 2 && param == "help")) {
+    print_usage();
+    return 1;
+  }
+
+  if (argc == 1) {
+    cout << "Run as server mode!" << endl;
+    server();
+  } else {
+    cout << "Load input data from the file: " << param << endl;
+    process_data_file(param);
+  }
+  return 0;
+}
+
