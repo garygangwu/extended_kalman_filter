@@ -29,10 +29,36 @@ std::string hasData(std::string s) {
   return "";
 }
 
+void generate_output_file(
+    vector<VectorXd>& estimations,
+    vector<VectorXd>& measured_positions,
+    vector<VectorXd>& ground_truth) {
+  //'px_est','py_est','vx_est','vy_est','px_meas','py_meas','px_gt','py_gt','vx_gt','vy_gt'
+  assert(estimations.size() == measured_positions.size());
+  assert(estimations.size() == ground_truth.size());
+
+  string file_name = "output.txt";
+  ofstream outputFile;
+  outputFile.open(file_name);
+
+  for (int i=0; i<estimations.size(); ++i) {
+    const VectorXd& est = estimations[i];
+    const VectorXd& meas = measured_positions[i];
+    const VectorXd& gt = ground_truth[i];
+
+    outputFile << est(0) << "\t" << est(1) << "\t" << est(2) << "\t" << est(3) << "\t"
+               << meas(0) << "\t" << meas(1) << "\t"
+               << gt(0) << "\t" << gt(1) << "\t" << gt(2) << "\t" << gt(3) << endl;
+  }
+  outputFile.close();
+  cout << "Save the log file: " << file_name << endl;
+}
+
 void process_sensor_measurment(
     istringstream& iss,
     FusionEKF& fusionEKF,
     vector<VectorXd>& estimations,
+    vector<VectorXd>& measured_positions,
     vector<VectorXd>& ground_truth) {
 
   int64_t timestamp;
@@ -64,6 +90,12 @@ void process_sensor_measurment(
     iss >> timestamp;
     meas_package.timestamp_ = timestamp;
   }
+
+  meas_package.UpdatePosition();
+  VectorXd meas_position(2);
+  meas_position(0) = meas_package.measured_px_;
+  meas_position(1) = meas_package.measured_py_;
+  measured_positions.push_back(meas_position);
 
   float x_gt;
   float y_gt;
@@ -107,15 +139,24 @@ int server() {
   // used to compute the RMSE later
   Tools tools;
   vector<VectorXd> estimations;
+  vector<VectorXd> measured_positions;
   vector<VectorXd> ground_truth;
 
-  h.onMessage([&fusionEKF,&tools,&estimations,&ground_truth](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length, uWS::OpCode opCode) {
+  h.onMessage(
+    [&fusionEKF,
+     &tools,
+     &estimations,
+     &measured_positions,
+     &ground_truth](
+       uWS::WebSocket<uWS::SERVER> ws,
+       char *data,
+       size_t length,
+       uWS::OpCode opCode) {
+
     // "42" at the start of the message means there's a websocket message event.
     // The 4 signifies a websocket message
     // The 2 signifies a websocket event
-
-    if (length && length > 2 && data[0] == '4' && data[1] == '2')
-    {
+    if (length && length > 2 && data[0] == '4' && data[1] == '2') {
 
       auto s = hasData(std::string(data));
       if (s != "") {
@@ -130,7 +171,7 @@ int server() {
           string sensor_measurment = j[1]["sensor_measurement"];
 
           istringstream iss(sensor_measurment);
-          process_sensor_measurment(iss, fusionEKF, estimations, ground_truth);
+          process_sensor_measurment(iss, fusionEKF, estimations, measured_positions, ground_truth);
 
           double p_x = fusionEKF.ekf_.x_(0);
           double p_y = fusionEKF.ekf_.x_(1);
@@ -202,15 +243,18 @@ void process_data_file(string file_name) {
   Tools tools;
   FusionEKF fusionEKF;
   vector<VectorXd> estimations;
+  vector<VectorXd> measured_positions;
   vector<VectorXd> ground_truth;
 
   while (std::getline(infile, line)) {
     istringstream iss(line);
-    process_sensor_measurment(iss, fusionEKF, estimations, ground_truth);
+    process_sensor_measurment(iss, fusionEKF, estimations, measured_positions, ground_truth);
 
     VectorXd RMSE = tools.CalculateRMSE(estimations, ground_truth);
     cout << "RMSE: " << RMSE << endl;
   }
+
+  generate_output_file(estimations, measured_positions, ground_truth);
 }
 
 void print_usage() {
